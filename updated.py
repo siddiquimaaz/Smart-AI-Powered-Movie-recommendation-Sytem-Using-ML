@@ -306,11 +306,30 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed"
     )
-    
+    debug_info = {}
     # Load custom CSS
     load_css()
-
-    # Initialize session state
+    
+    if st.sidebar.button("🔍 Debug Info"):
+      st.sidebar.write("Session State Debug:")
+      debug_info = {
+        'logged_in': st.session_state.get('logged_in', 'Not set'),
+        'username': st.session_state.get('username', 'Not set'),
+        'login_attempted': st.session_state.get('login_attempted', 'Not set'),
+        'signup_attempted': st.session_state.get('signup_attempted', 'Not set'),
+        'models_loaded': st.session_state.get('models_loaded', 'Not set'),
+    }
+    st.sidebar.json(debug_info)
+      
+    if st.sidebar.button("🔄 Reset Session"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+    # Check if Firebase is initialized
+    # if not firebase_admin._apps:
+    #     st.error("🚨 Firebase not initialized. Please check your configuration.")
+    #     return
+    # Initialize session state - IMPORTANT: Initialize all keys at once
     if 'logged_in' not in st.session_state:
         st.session_state.update({
             'logged_in': False,
@@ -323,7 +342,9 @@ def main():
             'search_query': '',
             'search_results': pd.DataFrame(),
             'show_suggestions': False,
-            'selected_suggestion': ''
+            'selected_suggestion': '',
+            'login_attempted': False,  # Add this flag
+            'signup_attempted': False  # Add this flag
         })
 
     # Authentication Section
@@ -343,22 +364,41 @@ def main():
             with login_tab:
                 with st.container():
                     st.markdown("### Welcome Back!")
+                    
+                    # Use a form without clear_on_submit to maintain values
                     with st.form("login_form", clear_on_submit=False):
-                        email = st.text_input("📧 Email", placeholder="Enter your email")
-                        password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
+                        email = st.text_input("📧 Email", placeholder="Enter your email", key="login_email")
+                        password = st.text_input("🔒 Password", type="password", placeholder="Enter your password", key="login_password")
                         
                         col_a, col_b, col_c = st.columns([1, 2, 1])
                         with col_b:
                             login_btn = st.form_submit_button("🚀 Login", use_container_width=True)
                         
-                        if login_btn:
-                            if email and password:
-                                with st.spinner("Logging you in..."):
+                        # Handle login outside of form but inside the tab
+                        if login_btn and email and password:
+                            if not st.session_state.get('login_attempted', False):
+                                st.session_state.login_attempted = True
+                                
+                                # Show progress
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                
+                                try:
+                                    status_text.text("🔐 Authenticating...")
+                                    progress_bar.progress(25)
+                                    
                                     res = sign_in(email, password)
-                                    if res['status'] == 'success':
+                                    progress_bar.progress(50)
+                                    
+                                    if res and res.get('status') == 'success':
+                                        status_text.text("✅ Login successful! Loading your profile...")
+                                        progress_bar.progress(75)
+                                        
+                                        # Set session state
                                         st.session_state.logged_in = True
                                         st.session_state.username = email
                                         
+                                        # Load user data
                                         try:
                                             user_data = db.collection('users').document(email).get().to_dict() or {}
                                             st.session_state.liked_movies = user_data.get('liked_movies', [])
@@ -367,44 +407,93 @@ def main():
                                         except Exception as e:
                                             st.warning("Could not load user preferences")
                                         
-                                        st.success("🎉 Login successful!")
+                                        progress_bar.progress(100)
+                                        status_text.text("🎉 Welcome back! Redirecting...")
+                                        
+                                        # Clear the attempt flag and rerun
+                                        st.session_state.login_attempted = False
                                         time.sleep(1)
                                         st.rerun()
+                                        
                                     else:
-                                        st.error(f"❌ {res.get('message', 'Login failed')}")
-                            else:
-                                st.warning("Please fill in all fields")
+                                        progress_bar.empty()
+                                        status_text.empty()
+                                        st.session_state.login_attempted = False
+                                        st.error(f"❌ {res.get('message', 'Login failed') if res else 'Login failed'}")
+                                        
+                                except Exception as e:
+                                    progress_bar.empty()
+                                    status_text.empty()
+                                    st.session_state.login_attempted = False
+                                    st.error(f"❌ Login error: {str(e)}")
+                        
+                        elif login_btn:
+                            st.warning("Please fill in all fields")
 
             with signup_tab:
                 with st.container():
                     st.markdown("### Join the Community!")
+                    
                     with st.form("signup_form", clear_on_submit=False):
-                        name = st.text_input("👤 Full Name", placeholder="Enter your full name")
-                        email = st.text_input("📧 Email", key="s_email", placeholder="Enter your email")
-                        password = st.text_input("🔒 Password", type="password", key="s_password", placeholder="Create a password")
+                        name = st.text_input("👤 Full Name", placeholder="Enter your full name", key="signup_name")
+                        email = st.text_input("📧 Email", placeholder="Enter your email", key="signup_email")
+                        password = st.text_input("🔒 Password", type="password", placeholder="Create a password", key="signup_password")
                         
                         col_a, col_b, col_c = st.columns([1, 2, 1])
                         with col_b:
                             signup_btn = st.form_submit_button("🎬 Join Now", use_container_width=True)
                         
-                        if signup_btn:
-                            if name and email and password:
-                                with st.spinner("Creating your account..."):
+                        # Handle signup outside of form but inside the tab
+                        if signup_btn and name and email and password:
+                            if not st.session_state.get('signup_attempted', False):
+                                st.session_state.signup_attempted = True
+                                
+                                # Show progress
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                
+                                try:
+                                    status_text.text("🎬 Creating your account...")
+                                    progress_bar.progress(25)
+                                    
                                     res = sign_up("", email, password, name)
-                                    if res['status'] == 'success':
+                                    progress_bar.progress(50)
+                                    
+                                    if res and res.get('status') == 'success':
+                                        status_text.text("✅ Account created! Setting up your profile...")
+                                        progress_bar.progress(75)
+                                        
+                                        # Set session state
                                         st.session_state.logged_in = True
                                         st.session_state.username = email
                                         st.session_state.liked_movies = []
                                         st.session_state.preferences_set = False
                                         st.session_state.first_login = True
                                         
-                                        st.success("🎉 Account created successfully!")
+                                        progress_bar.progress(100)
+                                        status_text.text("🎉 Welcome to the community! Redirecting...")
+                                        
+                                        # Clear the attempt flag and rerun
+                                        st.session_state.signup_attempted = False
                                         time.sleep(1)
                                         st.rerun()
+                                        
                                     else:
-                                        st.error(f"❌ {res.get('message', 'Signup failed')}")
-                            else:
-                                st.warning("Please fill in all fields")
+                                        progress_bar.empty()
+                                        status_text.empty()
+                                        st.session_state.signup_attempted = False
+                                        st.error(f"❌ {res.get('message', 'Signup failed') if res else 'Signup failed'}")
+                                        
+                                except Exception as e:
+                                    progress_bar.empty()
+                                    status_text.empty()
+                                    st.session_state.signup_attempted = False
+                                    st.error(f"❌ Signup error: {str(e)}")
+                        
+                        elif signup_btn:
+                            st.warning("Please fill in all fields")
+        
+        # Stop execution here if not logged in
         return
 
     # Initialize model loading state
