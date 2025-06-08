@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 import requests
 import ast
+import traceback
 import random
 import difflib
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -11,14 +12,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 from auth import sign_in, sign_up, get_name
 import firebase_admin
 from firebase_admin import credentials, firestore
+from admin_db import db,get_likes_from_db,save_likes_to_db
 import time
 from css import load_css  # Import custom CSS for styling
 
 # Firebase Init
-if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase.json")
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
 
 # Paths
 DATA_DIR = "D:/spring 2025S/project/Dataset"
@@ -56,6 +54,31 @@ def get_popular_movies(movies, n=8):
                 continue
     
     return movies.sample(n)
+
+def handle_like_toggle(movie_name, key_suffix=""):
+    if movie_name in st.session_state.liked_movies:
+        st.session_state.liked_movies.remove(movie_name)
+        st.success(f"❤️ Removed '{movie_name}' from your likes!")
+    else:
+        st.session_state.liked_movies.append(movie_name)
+        st.success(f"💖 Added '{movie_name}' to your likes!")
+
+    st.write("🔄 Attempting to update Firebase...")
+    st.write("Current liked movies:", st.session_state.liked_movies)
+    st.write("User:", st.session_state.username)
+
+    try:
+        print(f"[DEBUG] Writing likes for user {st.session_state.username}: {st.session_state.liked_movies}")
+        result = db.collection('users').document(st.session_state.username).set({
+            'liked_movies': st.session_state.liked_movies,
+            'preferences_set': bool(st.session_state.liked_movies)
+        }, merge=True)
+        print("[DEBUG] Firestore write result:", result)
+        st.success("✅ Firebase updated successfully!")
+    except Exception as e:
+        st.error(f"❌ Failed to save to database.")
+        st.exception(e)
+        traceback.print_exc()
 
 def recommend_based_on_preferences(liked_movies, movies, similarity, top_n=8):
     """Enhanced recommendation system with better user preference matching"""
@@ -165,23 +188,6 @@ def get_smart_recommendations(liked_movies, movies, similarity, strategy='mixed'
     
     return all_recommendations
 
-def handle_like_toggle(movie_name, key_suffix=""):
-    """Handle like/unlike functionality with proper state management"""
-    if movie_name in st.session_state.liked_movies:
-        st.session_state.liked_movies.remove(movie_name)
-        st.success(f"❤️ Removed '{movie_name}' from your likes!")
-    else:
-        st.session_state.liked_movies.append(movie_name)
-        st.success(f"💖 Added '{movie_name}' to your likes!")
-    
-    # Update Firebase
-    try:
-        db.collection('users').document(st.session_state.username).set({
-            'liked_movies': st.session_state.liked_movies,
-            'preferences_set': bool(st.session_state.liked_movies)
-        }, merge=True)
-    except Exception as e:
-        st.error(f"Failed to save to database: {e}")
 
 def display_movies_grid(names, posters, key_prefix="", allow_like=True, columns=4, sources=None, show_explanation=False):
     """Enhanced movie grid display with recommendation explanations"""

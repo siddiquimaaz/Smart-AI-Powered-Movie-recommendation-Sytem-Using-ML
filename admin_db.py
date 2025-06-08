@@ -17,11 +17,16 @@ def save_likes_to_db(user_id, liked_movies):
 
 def get_likes_from_db(user_id):
     try:
+        print(f"[DEBUG] Fetching likes for user_id: {user_id}")
         doc_ref = db.collection('users').document(user_id)
         doc = doc_ref.get()
         if doc.exists:
-            return doc.to_dict().get('liked_movies', [])
-        return []
+            liked_movies = doc.to_dict().get('liked_movies', [])
+            print(f"[DEBUG] Retrieved liked_movies: {liked_movies}")
+            return liked_movies
+        else:
+            print(f"[DEBUG] No document found for user_id: {user_id}")
+            return []
     except Exception as e:
-        print(f"Error getting likes: {e}")
+        print(f"[ERROR] Error getting likes from Firestore: {e}")
         return []
