@@ -15,11 +15,12 @@ from firebase_admin import credentials, firestore
 from admin_db import db,get_likes_from_db,save_likes_to_db
 import time
 from css import load_css  # Import custom CSS for styling
+import numpy as np
 
 # Firebase Init
 
 # Paths
-DATA_DIR = "D:/spring 2025S/project/Dataset"
+DATA_DIR = "/Dataset"
 MOVIES_PATH = os.path.join(DATA_DIR, "tmdb_5000_movies.csv")
 CREDITS_PATH = os.path.join(DATA_DIR, "tmdb_5000_credits.csv")
 MODEL_DIR = "model"
@@ -33,7 +34,7 @@ def fetch_poster(movie_id):
         return "https://via.placeholder.com/500x750?text=No+API+Key"
     try:
         url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&language=en-US"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=5)  # Reduced timeout
         data = response.json()
         return "https://image.tmdb.org/t/p/w500/" + data.get('poster_path', '') if data.get('poster_path') else "https://via.placeholder.com/500x750?text=No+Image"
     except:
@@ -68,10 +69,11 @@ def handle_like_toggle(movie_name, key_suffix=""):
     st.write("User:", st.session_state.username)
 
     try:
-        print(f"[DEBUG] Writing likes for user {st.session_state.username}: {st.session_state.liked_movies}")
-        result = db.collection('users').document(st.session_state.username).set({
+        print(f"[DEBUG] Writing likes for user {st.session_state.uid}: {st.session_state.liked_movies}")
+        result = db.collection('users').document(st.session_state.uid).set({
             'liked_movies': st.session_state.liked_movies,
-            'preferences_set': bool(st.session_state.liked_movies)
+            'preferences_set': bool(st.session_state.liked_movies),
+            'email': st.session_state.username  # Store email as a field
         }, merge=True)
         print("[DEBUG] Firestore write result:", result)
         st.success("✅ Firebase updated successfully!")
@@ -80,117 +82,147 @@ def handle_like_toggle(movie_name, key_suffix=""):
         st.exception(e)
         traceback.print_exc()
 
-def recommend_based_on_preferences(liked_movies, movies, similarity, top_n=8):
-    """Enhanced recommendation system with better user preference matching"""
+# Cache recommendations for better performance
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
+def recommend_based_on_preferences(liked_movies, movies, similarity, disliked_movies=None, top_n=8):
+    """Enhanced recommendation system with feedback consideration"""
+    if not liked_movies:
+        return [], [], []
+    
     indices = [movies[movies['title'] == m].index[0] for m in liked_movies if not movies[movies['title'] == m].empty]
     if not indices:
-        return [], []
+        return [], [], []
     
-    # Weighted similarity scoring based on user preference strength
+    # Get disliked indices
+    disliked_indices = []
+    if disliked_movies:
+        disliked_indices = [movies[movies['title'] == m].index[0] for m in disliked_movies if not movies[movies['title'] == m].empty]
+    
+    # Pre-compute similarity scores
     sim_scores = {}
     total_weight = len(indices)
     
+    # Use numpy for faster computation
+    similarity_matrix = np.array(similarity)
+    
     for idx in indices:
-        # Give more weight to recent likes (last in the list)
         weight = (indices.index(idx) + 1) / total_weight
+        scores = similarity_matrix[idx]
         
-        for i, score in enumerate(similarity[idx]):
-            if i not in indices:  # Don't recommend already liked movies
-                sim_scores[i] = sim_scores.get(i, 0) + (score * weight)
+        # Exclude both liked and disliked movies
+        valid_indices = np.where(~np.isin(np.arange(len(scores)), indices + disliked_indices))[0]
+        
+        # Apply feedback-based weighting
+        for i in valid_indices:
+            if i not in sim_scores:
+                sim_scores[i] = 0
+            sim_scores[i] += scores[i] * weight
     
-    # Filter out low-quality recommendations (similarity < 0.1)
+    # Filter and sort using numpy
     filtered_scores = {i: score for i, score in sim_scores.items() if score > 0.1}
-    
     if not filtered_scores:
-        # Fallback to unfiltered if no good matches
         filtered_scores = sim_scores
     
-    # Sort and get top recommendations
-    sorted_movies = sorted(filtered_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    sorted_indices = sorted(filtered_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
     
-    names = [movies.iloc[i]['title'] for i, _ in sorted_movies]
-    posters = [fetch_poster(movies.iloc[i]['movie_id']) for i, _ in sorted_movies]
-    scores = [score for _, score in sorted_movies]  # Keep scores for debugging
+    names = [movies.iloc[i]['title'] for i, _ in sorted_indices]
+    posters = [fetch_poster(movies.iloc[i]['movie_id']) for i, _ in sorted_indices]
+    scores = [score for _, score in sorted_indices]
     
     return names, posters, scores
 
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
 def get_genre_based_recommendations(liked_movies, movies, n=8):
-    """Get recommendations based on genre preferences"""
-    if not liked_movies:
+    """Get recommendations based on genre preferences with caching"""
+    if not liked_movies or 'genres' not in movies.columns:
         return [], []
     
-    # Extract genres from liked movies (if genre column exists)
-    if 'genres' in movies.columns:
-        liked_genres = []
-        for movie in liked_movies:
-            movie_data = movies[movies['title'] == movie]
-            if not movie_data.empty and pd.notna(movie_data.iloc[0]['genres']):
-                try:
-                    # Parse genres (assuming it's stored as string representation of list)
-                    genres = ast.literal_eval(movie_data.iloc[0]['genres'])
-                    if isinstance(genres, list):
-                        liked_genres.extend([g['name'] for g in genres if isinstance(g, dict) and 'name' in g])
-                except:
-                    pass
-        
-        if liked_genres:
-            # Count genre preferences
-            from collections import Counter
-            genre_counts = Counter(liked_genres)
-            top_genres = [genre for genre, _ in genre_counts.most_common(3)]
-            
-            # Find movies with similar genres
-            recommendations = []
-            for _, movie in movies.iterrows():
-                if movie['title'] not in liked_movies:
-                    try:
-                        movie_genres = ast.literal_eval(movie['genres'])
-                        if isinstance(movie_genres, list):
-                            movie_genre_names = [g['name'] for g in movie_genres if isinstance(g, dict) and 'name' in g]
-                            # Check if movie has any of user's preferred genres
-                            if any(genre in movie_genre_names for genre in top_genres):
-                                recommendations.append(movie)
-                    except:
-                        continue
-            
-            if recommendations:
-                # Convert to DataFrame and sample
-                rec_df = pd.DataFrame(recommendations).sample(min(n, len(recommendations)))
-                names = rec_df['title'].tolist()
-                posters = [fetch_poster(mid) for mid in rec_df['movie_id']]
-                return names, posters
+    # Extract genres from liked movies
+    liked_genres = []
+    for movie in liked_movies:
+        movie_data = movies[movies['title'] == movie]
+        if not movie_data.empty and pd.notna(movie_data.iloc[0]['genres']):
+            try:
+                genres = ast.literal_eval(movie_data.iloc[0]['genres'])
+                if isinstance(genres, list):
+                    liked_genres.extend([g['name'] for g in genres if isinstance(g, dict) and 'name' in g])
+            except:
+                continue
+    
+    if not liked_genres:
+        return [], []
+    
+    # Count genre preferences
+    from collections import Counter
+    genre_counts = Counter(liked_genres)
+    top_genres = [genre for genre, _ in genre_counts.most_common(3)]
+    
+    # Use vectorized operations for better performance
+    recommendations = []
+    for _, movie in movies.iterrows():
+        if movie['title'] not in liked_movies:
+            try:
+                movie_genres = ast.literal_eval(movie['genres'])
+                if isinstance(movie_genres, list):
+                    movie_genre_names = [g['name'] for g in movie_genres if isinstance(g, dict) and 'name' in g]
+                    if any(genre in movie_genre_names for genre in top_genres):
+                        recommendations.append(movie)
+            except:
+                continue
+    
+    if recommendations:
+        rec_df = pd.DataFrame(recommendations).sample(min(n, len(recommendations)))
+        names = rec_df['title'].tolist()
+        posters = [fetch_poster(mid) for mid in rec_df['movie_id']]
+        return names, posters
     
     return [], []
 
-def get_smart_recommendations(liked_movies, movies, similarity, strategy='mixed'):
-    """Get recommendations using multiple strategies"""
+def get_smart_recommendations(liked_movies, disliked_movies, movies, similarity, strategy='mixed'):
+    """Enhanced recommendation system using both likes and dislikes"""
     all_recommendations = {'names': [], 'posters': [], 'sources': []}
     
-    if strategy == 'mixed' and len(liked_movies) >= 2:
-        # Content-based recommendations (primary)
-        content_names, content_posters, _ = recommend_based_on_preferences(liked_movies, movies, similarity, top_n=6)
+    if strategy == 'mixed' and (len(liked_movies) >= 2 or len(disliked_movies) >= 2):
+        # Content-based recommendations with feedback
+        content_names, content_posters, _ = recommend_based_on_preferences(
+            liked_movies, 
+            movies, 
+            similarity, 
+            disliked_movies=disliked_movies,  # Pass disliked movies
+            top_n=6
+        )
         all_recommendations['names'].extend(content_names)
         all_recommendations['posters'].extend(content_posters)
         all_recommendations['sources'].extend(['Content-Based'] * len(content_names))
         
-        # Genre-based recommendations (secondary)
-        genre_names, genre_posters = get_genre_based_recommendations(liked_movies, movies, n=2)
+        # Genre-based recommendations with feedback
+        genre_names, genre_posters = get_genre_based_recommendations(
+            liked_movies, 
+            movies, 
+            n=2,
+            disliked_movies=disliked_movies  # Pass disliked movies
+        )
         all_recommendations['names'].extend(genre_names)
         all_recommendations['posters'].extend(genre_posters)
         all_recommendations['sources'].extend(['Genre-Based'] * len(genre_names))
         
     else:
         # Fallback to content-based only
-        names, posters, _ = recommend_based_on_preferences(liked_movies, movies, similarity, top_n=8)
+        names, posters, _ = recommend_based_on_preferences(
+            liked_movies, 
+            movies, 
+            similarity, 
+            disliked_movies=disliked_movies,  # Pass disliked movies
+            top_n=8
+        )
         all_recommendations['names'] = names
         all_recommendations['posters'] = posters
         all_recommendations['sources'] = ['Content-Based'] * len(names)
     
     return all_recommendations
 
-
 def display_movies_grid(names, posters, key_prefix="", allow_like=True, columns=4, sources=None, show_explanation=False):
-    """Enhanced movie grid display with recommendation explanations"""
+    """Enhanced movie grid display with feedback options"""
     if not names:
         return
     
@@ -215,82 +247,96 @@ def display_movies_grid(names, posters, key_prefix="", allow_like=True, columns=
                         st.caption("✨ Recommended for you")
                 
                 if allow_like:
-                    button_key = f"{key_prefix}_like_{idx}_{name}_{hash(name) % 10000}"
-                    is_liked = name in st.session_state.liked_movies
-                    button_text = "💖 Liked" if is_liked else "🤍 Like"
+                    # Like/Dislike buttons
+                    col_like, col_dislike = st.columns(2)
+                    with col_like:
+                        is_liked = name in st.session_state.liked_movies
+                        button_text = "💖 Liked" if is_liked else "🤍 Like"
+                        if st.button(button_text, key=f"{key_prefix}_like_{idx}", use_container_width=True):
+                            if handle_movie_feedback(name, 'like'):
+                                st.success("Thanks for your feedback!")
+                                time.sleep(0.1)
+                                st.rerun()
                     
-                    if st.button(button_text, key=button_key, use_container_width=True):
-                        handle_like_toggle(name, key_suffix=str(idx))
-                        time.sleep(0.1)
-                        st.rerun()
-                        
-                    # Add feedback buttons for recommendations
-                    if show_explanation and key_prefix == "recommend":
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("👍", key=f"good_{key_prefix}_{idx}", help="Good recommendation"):
-                                st.success("Thanks for the feedback!")
-                        with col_b:
-                            if st.button("👎", key=f"bad_{key_prefix}_{idx}", help="Not interested"):
-                                st.info("We'll learn from this!")
+                    with col_dislike:
+                        is_disliked = name in st.session_state.disliked_movies
+                        button_text = "👎 Disliked" if is_disliked else "👎 Dislike"
+                        if st.button(button_text, key=f"{key_prefix}_dislike_{idx}", use_container_width=True):
+                            if handle_movie_feedback(name, 'dislike'):
+                                st.info("We'll avoid similar movies!")
+                                time.sleep(0.1)
+                                st.rerun()
 
-def get_movie_suggestions(query, movies, limit=5):
-    """Get movie suggestions for autocomplete"""
+# Cache movie suggestions for better performance
+@st.cache_data(ttl=3600)
+def get_movie_suggestions(query, movies, limit=10):
+    """Get comprehensive movie suggestions for autocomplete"""
     if not query or len(query) < 2:
         return []
     
-    # Filter movies that start with or contain the query
+    # Create lowercase title column for faster searching
+    if 'title_lower' not in movies.columns:
+        movies['title_lower'] = movies['title'].str.lower()
+    
     query_lower = query.lower()
     suggestions = []
     
-    # First priority: movies that start with the query
-    for title in movies['title']:
-        if title.lower().startswith(query_lower):
-            suggestions.append(title)
+    # 1. Exact matches (case insensitive)
+    exact_matches = movies[movies['title_lower'] == query_lower]['title'].tolist()
+    suggestions.extend(exact_matches)
     
-    # Second priority: movies that contain the query
+    # 2. Starts with matches
+    starts_with = movies[movies['title_lower'].str.startswith(query_lower)]['title'].tolist()
+    suggestions.extend([m for m in starts_with if m not in suggestions])
+    
+    # 3. Contains matches
+    contains = movies[movies['title_lower'].str.contains(query_lower, na=False)]['title'].tolist()
+    suggestions.extend([m for m in contains if m not in suggestions])
+    
+    # 4. Fuzzy matches for better suggestions
     if len(suggestions) < limit:
-        for title in movies['title']:
-            if query_lower in title.lower() and title not in suggestions:
-                suggestions.append(title)
+        from difflib import get_close_matches
+        all_titles = movies['title'].tolist()
+        fuzzy_matches = get_close_matches(query_lower, [t.lower() for t in all_titles], n=5, cutoff=0.6)
+        fuzzy_matches = [movies[movies['title_lower'] == m]['title'].iloc[0] for m in fuzzy_matches if m]
+        suggestions.extend([m for m in fuzzy_matches if m not in suggestions])
     
     return suggestions[:limit]
 
 def search_movies_improved(query, movies):
-    """Improved movie search with exact and fuzzy matching"""
+    """Enhanced movie search with better matching"""
     if not query or len(query.strip()) < 2:
         return pd.DataFrame()
     
     query = query.strip()
-    results = []
     
-    # Exact matches (case insensitive)
-    exact_matches = movies[movies['title'].str.lower().str.contains(query.lower(), na=False, regex=False)]
-    results.append(exact_matches)
+    # Create lowercase title column if it doesn't exist
+    if 'title_lower' not in movies.columns:
+        movies['title_lower'] = movies['title'].str.lower()
     
-    # If we have few exact matches, add fuzzy matches
-    if len(exact_matches) < 10:
-        # Get close matches using difflib
+    # 1. Exact matches
+    exact_matches = movies[movies['title_lower'] == query.lower()]
+    
+    # 2. Starts with matches
+    starts_with = movies[movies['title_lower'].str.startswith(query.lower())]
+    starts_with = starts_with[~starts_with['title'].isin(exact_matches['title'])]
+    
+    # 3. Contains matches
+    contains = movies[movies['title_lower'].str.contains(query.lower(), na=False)]
+    contains = contains[~contains['title'].isin(pd.concat([exact_matches, starts_with])['title'])]
+    
+    # 4. Fuzzy matches if we have few results
+    if len(exact_matches) + len(starts_with) + len(contains) < 10:
+        from difflib import get_close_matches
         all_titles = movies['title'].tolist()
-        fuzzy_matches = difflib.get_close_matches(
-            query.lower(), 
-            [title.lower() for title in all_titles], 
-            n=15, 
-            cutoff=0.4
-        )
+        fuzzy_matches = get_close_matches(query.lower(), [t.lower() for t in all_titles], n=10, cutoff=0.6)
+        fuzzy_matches = movies[movies['title_lower'].isin(fuzzy_matches)]
+        fuzzy_matches = fuzzy_matches[~fuzzy_matches['title'].isin(pd.concat([exact_matches, starts_with, contains])['title'])]
         
-        # Convert back to original case and get movies
-        fuzzy_movies = pd.DataFrame()
-        for match in fuzzy_matches:
-            match_movies = movies[movies['title'].str.lower() == match]
-            fuzzy_movies = pd.concat([fuzzy_movies, match_movies], ignore_index=True)
-        
-        # Remove duplicates from exact matches
-        fuzzy_movies = fuzzy_movies[~fuzzy_movies['title'].isin(exact_matches['title'])]
-        results.append(fuzzy_movies)
-    
-    # Combine results
-    final_results = pd.concat(results, ignore_index=True) if results else pd.DataFrame()
+        # Combine all results
+        final_results = pd.concat([exact_matches, starts_with, contains, fuzzy_matches], ignore_index=True)
+    else:
+        final_results = pd.concat([exact_matches, starts_with, contains], ignore_index=True)
     
     # Remove duplicates and limit results
     if not final_results.empty:
@@ -305,6 +351,40 @@ def debug_dataframe_columns(df, name="DataFrame"):
         "Shape": df.shape,
         "Sample Data": df.head(2).to_dict() if not df.empty else "No data"
     })
+
+def handle_movie_feedback(movie_name, feedback_type):
+    """Handle movie feedback (like/dislike) and update Firebase"""
+    try:
+        # Update session state
+        if feedback_type == 'like':
+            if movie_name in st.session_state.disliked_movies:
+                st.session_state.disliked_movies.remove(movie_name)
+            if movie_name not in st.session_state.liked_movies:
+                st.session_state.liked_movies.append(movie_name)
+        else:  # dislike
+            if movie_name in st.session_state.liked_movies:
+                st.session_state.liked_movies.remove(movie_name)
+            if movie_name not in st.session_state.disliked_movies:
+                st.session_state.disliked_movies.append(movie_name)
+        
+        # Update feedback in session state
+        st.session_state.movie_feedback[movie_name] = {
+            'type': feedback_type,
+            'timestamp': time.time()
+        }
+        
+        # Update Firebase
+        db.collection('users').document(st.session_state.uid).set({
+            'liked_movies': st.session_state.liked_movies,
+            'disliked_movies': st.session_state.disliked_movies,
+            'movie_feedback': st.session_state.movie_feedback,
+            'preferences_set': bool(st.session_state.liked_movies or st.session_state.disliked_movies)
+        }, merge=True)
+        
+        return True
+    except Exception as e:
+        st.error(f"Failed to save feedback: {e}")
+        return False
 
 def main():
     st.set_page_config(
@@ -340,7 +420,10 @@ def main():
         st.session_state.update({
             'logged_in': False,
             'username': '',
+            'uid': '',
             'liked_movies': [],
+            'disliked_movies': [],  # Add disliked movies tracking
+            'movie_feedback': {},   # Add detailed feedback tracking
             'preferences_set': False,
             'current_tab': 'Discover',
             'first_login': True,
@@ -349,8 +432,8 @@ def main():
             'search_results': pd.DataFrame(),
             'show_suggestions': False,
             'selected_suggestion': '',
-            'login_attempted': False,  # Add this flag
-            'signup_attempted': False  # Add this flag
+            'login_attempted': False,
+            'signup_attempted': False
         })
 
     # Authentication Section
@@ -403,12 +486,15 @@ def main():
                                         # Set session state
                                         st.session_state.logged_in = True
                                         st.session_state.username = email
+                                        st.session_state.uid = res.get('uid')  # Store UID
                                         
-                                        # Load user data
+                                        # Load user data using UID
                                         try:
-                                            user_data = db.collection('users').document(email).get().to_dict() or {}
+                                            user_data = db.collection('users').document(st.session_state.uid).get().to_dict() or {}
                                             st.session_state.liked_movies = user_data.get('liked_movies', [])
-                                            st.session_state.preferences_set = bool(st.session_state.liked_movies)
+                                            st.session_state.disliked_movies = user_data.get('disliked_movies', [])
+                                            st.session_state.movie_feedback = user_data.get('movie_feedback', {})
+                                            st.session_state.preferences_set = bool(st.session_state.liked_movies or st.session_state.disliked_movies)
                                             st.session_state.first_login = False
                                         except Exception as e:
                                             st.warning("Could not load user preferences")
@@ -472,7 +558,10 @@ def main():
                                         # Set session state
                                         st.session_state.logged_in = True
                                         st.session_state.username = email
+                                        st.session_state.uid = res.get('uid')  # Store UID
                                         st.session_state.liked_movies = []
+                                        st.session_state.disliked_movies = []
+                                        st.session_state.movie_feedback = {}
                                         st.session_state.preferences_set = False
                                         st.session_state.first_login = True
                                         
@@ -509,20 +598,28 @@ def main():
         st.session_state.similarity = None
 
     # Load model files with caching
-    @st.cache_data
+    @st.cache_data(ttl=3600)  # Cache for 1 hour
     def load_movies():
-        return pickle.load(open(MOVIE_PKL, 'rb'))
+        try:
+            return pickle.load(open(MOVIE_PKL, 'rb'))
+        except Exception as e:
+            st.error(f"Error loading movie data: {e}")
+            return None
 
-    @st.cache_data
+    @st.cache_data(ttl=3600)  # Cache for 1 hour
     def load_similarity():
-        return pickle.load(open(SIMILARITY_PKL, 'rb'))
+        try:
+            return pickle.load(open(SIMILARITY_PKL, 'rb'))
+        except Exception as e:
+            st.error(f"Error loading similarity data: {e}")
+            return None
 
     # Check if model files exist
     if not os.path.exists(MOVIE_PKL) or not os.path.exists(SIMILARITY_PKL):
         st.error("🚨 Model files not found. Please build the recommendation model first.")
         return
 
-    # Load models only when needed
+    # Load models only when needed      x
     try:
         if not st.session_state.models_loaded:
             with st.spinner("🚀 Loading movie database... This may take a moment."):
@@ -561,6 +658,7 @@ def main():
         
         st.markdown("### Quick Stats")
         st.metric("Liked Movies", len(st.session_state.liked_movies))
+        st.metric("Disliked Movies", len(st.session_state.disliked_movies))
         st.metric("Available Movies", len(movies))
 
     # Main Tabs
@@ -593,12 +691,12 @@ def main():
 
             # Auto-suggestions
             if search_query and len(search_query) >= 2:
-                suggestions = get_movie_suggestions(search_query, movies, limit=5)
+                suggestions = get_movie_suggestions(search_query, movies, limit=10)
                 if suggestions and search_query != st.session_state.get('selected_suggestion', ''):
                     st.markdown("**💡 Suggestions:**")
-                    cols = st.columns(len(suggestions))
+                    cols = st.columns(min(5, len(suggestions)))
                     for idx, suggestion in enumerate(suggestions):
-                        with cols[idx]:
+                        with cols[idx % 5]:
                             if st.button(f"🎬 {suggestion}", key=f"suggestion_{idx}", use_container_width=True):
                                 st.session_state.search_query = suggestion
                                 st.session_state.selected_suggestion = suggestion
@@ -672,8 +770,8 @@ def main():
     with tabs[1]:
         st.markdown("### 🎯 Your Personal Recommendations")
         
-        if not st.session_state.liked_movies:
-            st.info("💡 **Get Started:** Like some movies in the Discover tab to get personalized recommendations!")
+        if not st.session_state.liked_movies and not st.session_state.disliked_movies:
+            st.info("💡 **Get Started:** Like or dislike some movies to get personalized recommendations!")
             
             st.markdown("#### 🌟 Popular Movies to Get You Started")
             try:
@@ -687,22 +785,16 @@ def main():
                 )
             except Exception as e:
                 st.error(f"Error loading popular movies: {e}")
-                random_movies = movies.sample(8)
-                posters = [fetch_poster(mid) for mid in random_movies['movie_id']]
-                display_movies_grid(
-                    random_movies['title'].tolist(), 
-                    posters, 
-                    key_prefix="popular_fallback",
-                    columns=4
-                )
         else:
             col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 recommend_btn = st.button("🎯 Get My Recommendations", use_container_width=True)
             with col2:
                 st.metric("Your Likes", len(st.session_state.liked_movies))
+                st.metric("Your Dislikes", len(st.session_state.disliked_movies))
             with col3:
-                recommendation_quality = "Excellent" if len(st.session_state.liked_movies) >= 5 else "Good" if len(st.session_state.liked_movies) >= 3 else "Basic"
+                feedback_count = len(st.session_state.liked_movies) + len(st.session_state.disliked_movies)
+                recommendation_quality = "Excellent" if feedback_count >= 5 else "Good" if feedback_count >= 3 else "Basic"
                 st.metric("Quality", recommendation_quality)
 
             if recommend_btn or st.session_state.get('show_recommendations', False):
@@ -711,19 +803,23 @@ def main():
                 with st.spinner("🤖 Analyzing your preferences and finding perfect matches..."):
                     # Use enhanced recommendation system
                     recommendations = get_smart_recommendations(
-                        st.session_state.liked_movies, movies, similarity, strategy='mixed'
+                        st.session_state.liked_movies,
+                        st.session_state.disliked_movies,
+                        movies, 
+                        similarity, 
+                        strategy='mixed'
                     )
                 
                 if recommendations['names']:
                     # Show recommendation insights
                     with st.expander("🧠 How we chose these for you", expanded=True):
-                        liked_count = len(st.session_state.liked_movies)
-                        if liked_count >= 5:
-                            st.success(f"✨ **Excellent Match Confidence** - Based on your {liked_count} liked movies, we're confident these recommendations match your taste!")
-                        elif liked_count >= 3:
-                            st.info(f"👍 **Good Match Confidence** - With {liked_count} likes, we have a solid understanding of your preferences.")
+                        feedback_count = len(st.session_state.liked_movies) + len(st.session_state.disliked_movies)
+                        if feedback_count >= 5:
+                            st.success(f"✨ **Excellent Match Confidence** - Based on your {feedback_count} feedback entries!")
+                        elif feedback_count >= 3:
+                            st.info(f"👍 **Good Match Confidence** - With {feedback_count} feedback entries, we have a solid understanding of your preferences.")
                         else:
-                            st.warning(f"📚 **Learning Your Taste** - Like more movies to get better recommendations! Current likes: {liked_count}")
+                            st.warning(f"📚 **Learning Your Taste** - Provide more feedback to get better recommendations!")
                         
                         # Show recommendation strategy breakdown
                         content_count = recommendations['sources'].count('Content-Based')
@@ -749,12 +845,12 @@ def main():
                     st.markdown("---")
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.info("💡 **Tip**: Like more movies from different genres to get diverse recommendations!")
+                        st.info("💡 **Tip**: Like or dislike more movies to get better recommendations!")
                     with col2:
-                        st.info("🎯 **Pro Tip**: Use 👍/👎 buttons to help us learn your preferences better!")
+                        st.info("🎯 **Pro Tip**: Your feedback helps us learn your preferences better!")
                         
                 else:
-                    st.info("🤔 Try liking more diverse movies to get better recommendations!")
+                    st.info("🤔 Try liking or disliking more movies to get better recommendations!")
                     
                     # Show fallback recommendations
                     st.markdown("#### 🎲 Here are some popular movies you might enjoy:")
@@ -782,11 +878,16 @@ def main():
             with col2:
                 if st.button("🗑️ Clear All Likes", use_container_width=True):
                     st.session_state.liked_movies = []
+                    st.session_state.disliked_movies = []
+                    st.session_state.movie_feedback = {}
                     st.session_state.preferences_set = False
                     try:
-                        db.collection('users').document(st.session_state.username).set({
+                        db.collection('users').document(st.session_state.uid).set({
                             'liked_movies': [], 
-                            'preferences_set': False
+                            'disliked_movies': [],
+                            'movie_feedback': {},
+                            'preferences_set': False,
+                            'email': st.session_state.username  # Keep email reference
                         }, merge=True)
                         st.success("🧹 All likes cleared!")
                         st.rerun()

@@ -23,6 +23,7 @@ def sign_up(username, email, password, full_name):
             return {"status": "error", "message": result["error"]["message"]}
 
         id_token = result["idToken"]
+        uid = result["localId"]  # Get UID from response
 
         # Set display name
         update_payload = {
@@ -36,7 +37,9 @@ def sign_up(username, email, password, full_name):
             "status": "success",
             "message": "Signup successful!",
             "idToken": id_token,
-            "displayName": full_name
+            "displayName": full_name,
+            "uid": uid,  # Include UID in response
+            "email": email
         }
 
     except Exception as e:
@@ -59,7 +62,8 @@ def sign_in(email, password):
             "status": "success",
             "message": "Login successful!",
             "idToken": result["idToken"],
-            "email": result["email"]
+            "email": result["email"],
+            "uid": result["localId"]  # Include UID in response
         }
 
     except Exception as e:
