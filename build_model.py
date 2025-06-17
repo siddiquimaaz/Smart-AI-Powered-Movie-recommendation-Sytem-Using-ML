@@ -125,7 +125,7 @@ def build_recommendation_model():
         movies['tags'] = movies['overview'] + movies['genres'] + movies['keywords'] + movies['cast'] + movies['crew']
         
         # Create new dataframe with required columns
-        new = movies[['movie_id', 'title', 'tags']].copy()
+        new = movies[['movie_id', 'title', 'tags', 'genres']].copy()
         
         # Convert tags list to string
         new['tags'] = new['tags'].apply(lambda x: " ".join(x).lower())
