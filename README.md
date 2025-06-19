@@ -56,7 +56,7 @@ An AI-powered, Firebase-authenticated Streamlit app that recommends movies based
 
 ```toml
 [general]
-tmdb_api_key = "your_tmdb_api_key"
+tmdb_api_key = "************************8"
 ```
 
 ---
@@ -86,7 +86,11 @@ If you don’t already have the `.pkl` files, run a preprocessing script to gene
 - `model/movie_list.pkl`
 - `model/similarity.pkl`
 
-(*Let me know if you need this script!*)
+To run the preprocessing script
+
+```bash
+python build_model.py
+```
 
 ---
 
@@ -94,6 +98,12 @@ If you don’t already have the `.pkl` files, run a preprocessing script to gene
 
 ```bash
 streamlit run updated.py
+```
+
+## To Run the test cases
+
+```bash
+python test-case.py
 ```
 
 ---
@@ -110,11 +120,6 @@ streamlit run updated.py
 
 ---
 
-## 📸 Screenshots
-
-*Add your app screenshots here*
-
----
 
 ## 🙌 Acknowledgements
 
