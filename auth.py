@@ -1,7 +1,8 @@
 import requests
+import streamlit as st
 
-# Your Firebase Web API key
-API_KEY = "AIzaSyC51A7mNToVwcg6BsqbV409nTLpf-LDLsQ"
+# Get Firebase Web API key from secrets
+API_KEY = st.secrets["firebase"]["web_api_key"]
 
 # Firebase endpoints
 SIGNUP_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={API_KEY}"

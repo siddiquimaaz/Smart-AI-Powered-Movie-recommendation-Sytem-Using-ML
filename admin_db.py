@@ -2,11 +2,33 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import streamlit as st
 from functools import lru_cache
+import json
 
-# Initialize Firebase Admin once
-cred = credentials.Certificate("firebase.json")
-firebase_admin.initialize_app(cred)
+# Initialize Firebase Admin once using secrets
+def initialize_firebase():
+    if not firebase_admin._apps:
+        # Get Firebase service account from secrets
+        firebase_secrets = st.secrets["firebase"]["service_account"]
+        
+        # Convert the secrets to a dictionary for credentials
+        cred_dict = {
+            "type": firebase_secrets["type"],
+            "project_id": firebase_secrets["project_id"],
+            "private_key_id": firebase_secrets["private_key_id"],
+            "private_key": firebase_secrets["private_key"].replace("\\n", "\n"),
+            "client_email": firebase_secrets["client_email"],
+            "client_id": firebase_secrets["client_id"],
+            "auth_uri": firebase_secrets["auth_uri"],
+            "token_uri": firebase_secrets["token_uri"],
+            "auth_provider_x509_cert_url": firebase_secrets["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": firebase_secrets["client_x509_cert_url"]
+        }
+        
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
 
+# Initialize Firebase
+initialize_firebase()
 db = firestore.client()
 
 # Cache user data for 5 minutes
