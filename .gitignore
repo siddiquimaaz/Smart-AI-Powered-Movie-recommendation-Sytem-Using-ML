@@ -59,3 +59,13 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+.env
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+*.pyzwzw
