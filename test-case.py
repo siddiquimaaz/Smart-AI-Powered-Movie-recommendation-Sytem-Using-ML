@@ -278,3 +278,12 @@
 
 #         save_likes_to_db(user_id, sample_likes)
 #         get_likes_from_db(user_id)
+# import streamlit as st
+
+# st.write("Secrets loaded:", st.secrets)
+# st.write("Firebase project ID:", st.secrets["firebase"]["service_account"]["project_id"])
+# import streamlit as st
+
+# pk = st.secrets["firebase"]["service_account"]["private_key"]
+# print("First 20 chars of key:", pk[:20])
+# print("Length of key:", len(pk))
