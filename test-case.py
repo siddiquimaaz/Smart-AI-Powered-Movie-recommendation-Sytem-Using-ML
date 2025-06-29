@@ -212,8 +212,8 @@
 # from firebase_admin import credentials, firestore
 
 # # --- Firebase config ---
-# FIREBASE_API_KEY = "AIzaSyC51A7mNToVwcg6BsqbV409nTLpf-LDLsQ"  # Replace this!
-# SIGNIN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={API_KEY}"
+# FIREBASE_API_KEY = "*****************************"  # Replace this!
+# SIGNIN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
 
 # # --- Firebase Admin Init ---
 # cred = credentials.Certificate("firebase.json")  # Replace path
@@ -288,129 +288,129 @@
 # print("First 20 chars of key:", pk[:20])
 # print("Length of key:", len(pk))
 
-import streamlit as st
-from admin_db import db
-from auth import sign_in
-import os
-import pickle
+# import streamlit as st
+# from admin_db import db
+# from auth import sign_in
+# import os
+# import pickle
 
-st.title("Smart Movie Recommender - Comprehensive Test Suite")
+# st.title("Smart Movie Recommender - Comprehensive Test Suite")
 
-# --- 1. User Authentication and Info Fetch ---
-st.header("1. User Authentication & Info Fetch")
-email = st.text_input("Enter your email")
-password = st.text_input("Enter your password", type="password")
+# # --- 1. User Authentication and Info Fetch ---
+# st.header("1. User Authentication & Info Fetch")
+# email = st.text_input("Enter your email")
+# password = st.text_input("Enter your password", type="password")
 
-if st.button("Fetch User Details"):
-    if not email or not password:
-        st.warning("Please enter both email and password.")
-    else:
-        res = sign_in(email, password)
-        if res and res.get("status") == "success":
-            uid = res.get("uid")
-            st.success(f"Authenticated! UID: {uid}")
-            user_data = db.collection('users').document(uid).get().to_dict() or {}
-            st.subheader("User Details from Firestore:")
-            st.json(user_data)
-            if 'display_name' in user_data:
-                st.info(f"Display Name: {user_data['display_name']}")
-        else:
-            st.error(f"Authentication failed: {res.get('message', 'Unknown error') if res else 'Unknown error'}")
+# if st.button("Fetch User Details"):
+#     if not email or not password:
+#         st.warning("Please enter both email and password.")
+#     else:
+#         res = sign_in(email, password)
+#         if res and res.get("status") == "success":
+#             uid = res.get("uid")
+#             st.success(f"Authenticated! UID: {uid}")
+#             user_data = db.collection('users').document(uid).get().to_dict() or {}
+#             st.subheader("User Details from Firestore:")
+#             st.json(user_data)
+#             if 'display_name' in user_data:
+#                 st.info(f"Display Name: {user_data['display_name']}")
+#         else:
+#             st.error(f"Authentication failed: {res.get('message', 'Unknown error') if res else 'Unknown error'}")
 
-# --- 2. Model File Loading and Structure ---
-st.header("2. Model File Loading & Structure")
-MOVIE_PKL = os.path.join("model", "movie_list.pkl")
-SIMILARITY_PKL = os.path.join("model", "similarity.pkl")
+# # --- 2. Model File Loading and Structure ---
+# st.header("2. Model File Loading & Structure")
+# MOVIE_PKL = os.path.join("model", "movie_list.pkl")
+# SIMILARITY_PKL = os.path.join("model", "similarity.pkl")
 
-try:
-    movies = pickle.load(open(MOVIE_PKL, 'rb'))
-    st.success(f"Loaded movies DataFrame: {type(movies)}, shape: {movies.shape}")
-    st.write(movies.head(2))
-except Exception as e:
-    st.error(f"Failed to load movies: {e}")
-    movies = None
+# try:
+#     movies = pickle.load(open(MOVIE_PKL, 'rb'))
+#     st.success(f"Loaded movies DataFrame: {type(movies)}, shape: {movies.shape}")
+#     st.write(movies.head(2))
+# except Exception as e:
+#     st.error(f"Failed to load movies: {e}")
+#     movies = None
 
-try:
-    similarity = pickle.load(open(SIMILARITY_PKL, 'rb'))
-    st.success(f"Loaded similarity matrix: {type(similarity)}, shape: {getattr(similarity, 'shape', 'N/A')}")
-except Exception as e:
-    st.error(f"Failed to load similarity: {e}")
-    similarity = None
+# try:
+#     similarity = pickle.load(open(SIMILARITY_PKL, 'rb'))
+#     st.success(f"Loaded similarity matrix: {type(similarity)}, shape: {getattr(similarity, 'shape', 'N/A')}")
+# except Exception as e:
+#     st.error(f"Failed to load similarity: {e}")
+#     similarity = None
 
-# --- 3. Genre and Movie Field Integrity ---
-st.header("3. Genre & Movie Field Integrity")
-if movies is not None:
-    required_columns = ['movie_id', 'title', 'genres']
-    missing = [col for col in required_columns if col not in movies.columns]
-    if missing:
-        st.error(f"Missing columns: {missing}")
-    else:
-        st.success("All required columns present.")
-    st.write("Sample genres field:", movies.iloc[0]['genres'])
+# # --- 3. Genre and Movie Field Integrity ---
+# st.header("3. Genre & Movie Field Integrity")
+# if movies is not None:
+#     required_columns = ['movie_id', 'title', 'genres']
+#     missing = [col for col in required_columns if col not in movies.columns]
+#     if missing:
+#         st.error(f"Missing columns: {missing}")
+#     else:
+#         st.success("All required columns present.")
+#     st.write("Sample genres field:", movies.iloc[0]['genres'])
 
-# --- 4. Poster Fetching Test ---
-st.header("4. Poster Fetching Test")
-def fetch_poster(movie_id, size='w500'):
-    import requests
-    api_key = st.secrets.get("tmdb_api_key", "")
-    placeholder_base = "https://via.placeholder.com/500x750"
-    if not api_key:
-        return f"{placeholder_base}?text=No+API+Key"
-    try:
-        url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&language=en-US"
-        response = requests.get(url, timeout=5)
-        if response.status_code != 200:
-            return f"{placeholder_base}?text=TMDB+Error+{response.status_code}"
-        data = response.json()
-        poster_path = data.get('poster_path')
-        if not poster_path:
-            return f"{placeholder_base}?text=No+Poster"
-        return f"https://image.tmdb.org/t/p/{size}/{poster_path}"
-    except Exception as e:
-        return f"{placeholder_base}?text=Error"
+# # --- 4. Poster Fetching Test ---
+# st.header("4. Poster Fetching Test")
+# def fetch_poster(movie_id, size='w500'):
+#     import requests
+#     api_key = st.secrets.get("tmdb_api_key", "")
+#     placeholder_base = "https://via.placeholder.com/500x750"
+#     if not api_key:
+#         return f"{placeholder_base}?text=No+API+Key"
+#     try:
+#         url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&language=en-US"
+#         response = requests.get(url, timeout=5)
+#         if response.status_code != 200:
+#             return f"{placeholder_base}?text=TMDB+Error+{response.status_code}"
+#         data = response.json()
+#         poster_path = data.get('poster_path')
+#         if not poster_path:
+#             return f"{placeholder_base}?text=No+Poster"
+#         return f"https://image.tmdb.org/t/p/{size}/{poster_path}"
+#     except Exception as e:
+#         return f"{placeholder_base}?text=Error"
 
-if movies is not None:
-    sample_movie = movies.iloc[0]
-    poster_url = fetch_poster(sample_movie['movie_id'])
-    st.image(poster_url, caption=f"Poster for {sample_movie['title']}")
+# if movies is not None:
+#     sample_movie = movies.iloc[0]
+#     poster_url = fetch_poster(sample_movie['movie_id'])
+#     st.image(poster_url, caption=f"Poster for {sample_movie['title']}")
 
-# --- 5. Recommendation Output Test ---
-st.header("5. Recommendation Output Test")
-if movies is not None and similarity is not None:
-    # Simulate a user with a few liked movies
-    liked_movies = movies['title'].sample(3).tolist()
-    disliked_movies = movies['title'].sample(2).tolist()
-    st.write(f"Liked movies: {liked_movies}")
-    st.write(f"Disliked movies: {disliked_movies}")
-    # Import the recommendation function from updated.py
-    from updated import get_ultimate_recommendations
-    names, posters, sources = get_ultimate_recommendations(liked_movies, disliked_movies, movies, similarity, top_n=5)
-    st.write("Recommendations:", names)
-    for name, poster, src in zip(names, posters, sources):
-        st.image(poster, caption=f"{name} ({src})")
+# # --- 5. Recommendation Output Test ---
+# st.header("5. Recommendation Output Test")
+# if movies is not None and similarity is not None:
+#     # Simulate a user with a few liked movies
+#     liked_movies = movies['title'].sample(3).tolist()
+#     disliked_movies = movies['title'].sample(2).tolist()
+#     st.write(f"Liked movies: {liked_movies}")
+#     st.write(f"Disliked movies: {disliked_movies}")
+#     # Import the recommendation function from updated.py
+#     from updated import get_ultimate_recommendations
+#     names, posters, sources = get_ultimate_recommendations(liked_movies, disliked_movies, movies, similarity, top_n=5)
+#     st.write("Recommendations:", names)
+#     for name, poster, src in zip(names, posters, sources):
+#         st.image(poster, caption=f"{name} ({src})")
 
-# --- 6. Edge Cases ---
-st.header("6. Edge Cases")
-if movies is not None and similarity is not None:
-    st.subheader("Empty likes/dislikes")
-    names, posters, sources = get_ultimate_recommendations([], [], movies, similarity, top_n=3)
-    st.write("Result:", names)
+# # --- 6. Edge Cases ---
+# st.header("6. Edge Cases")
+# if movies is not None and similarity is not None:
+#     st.subheader("Empty likes/dislikes")
+#     names, posters, sources = get_ultimate_recommendations([], [], movies, similarity, top_n=3)
+#     st.write("Result:", names)
 
-    st.subheader("Invalid movie names")
-    names, posters, sources = get_ultimate_recommendations(["NotARealMovie123"], [], movies, similarity, top_n=3)
-    st.write("Result:", names)
+#     st.subheader("Invalid movie names")
+#     names, posters, sources = get_ultimate_recommendations(["NotARealMovie123"], [], movies, similarity, top_n=3)
+#     st.write("Result:", names)
 
-    st.subheader("All disliked")
-    all_disliked = movies['title'].sample(5).tolist()
-    names, posters, sources = get_ultimate_recommendations([], all_disliked, movies, similarity, top_n=3)
-    st.write("Result:", names)
+#     st.subheader("All disliked")
+#     all_disliked = movies['title'].sample(5).tolist()
+#     names, posters, sources = get_ultimate_recommendations([], all_disliked, movies, similarity, top_n=3)
+#     st.write("Result:", names)
 
-    st.subheader("Large feedback (20 likes, 20 dislikes)")
-    many_likes = movies['title'].sample(20).tolist()
-    many_dislikes = movies['title'].sample(20).tolist()
-    names, posters, sources = get_ultimate_recommendations(many_likes, many_dislikes, movies, similarity, top_n=3)
-    st.write("Result:", names)
+#     st.subheader("Large feedback (20 likes, 20 dislikes)")
+#     many_likes = movies['title'].sample(20).tolist()
+#     many_dislikes = movies['title'].sample(20).tolist()
+#     names, posters, sources = get_ultimate_recommendations(many_likes, many_dislikes, movies, similarity, top_n=3)
+#     st.write("Result:", names)
 
-st.success("All tests completed.")
+# st.success("All tests completed.")
 
 
